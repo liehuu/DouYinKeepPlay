@@ -1,0 +1,5 @@
+.build/
+_dl*/
+*.deb
+.tok
+packages-*.zip
