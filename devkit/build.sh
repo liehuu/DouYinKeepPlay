@@ -43,10 +43,13 @@ echo "→ 产物闸门"
 # 1) 必须是 arm64 切片
 lipo -info "$BUILDDIR/$NAME.dylib" | grep -q arm64
 echo "  ✓ arm64 切片"
-# 2) filetype 必须是 MH_DYLIB(6)
-FT=$(otool -l "$BUILDDIR/$NAME.dylib" | awk '/filetype/{print $2; exit}')
-if [ "$FT" != "6" ]; then
-    echo "  ✗ filetype=$FT 不是 MH_DYLIB(6)"; exit 1
+# 2) filetype 必须是 MH_DYLIB(6)，不能是 MH_BUNDLE(8)
+#    ★ 用 od 直接读 mach_header_64 偏移 12（4 字节小端），
+#      不用 `otool -l | awk '/filetype/'` —— 不同 Xcode 版本 otool 的
+#      输出空白/字段位置会变（实测 Xcode 26.6 上 awk 取到空值 → 假红）。
+DTYPE=$(od -An -tu4 -j12 -N4 "$BUILDDIR/$NAME.dylib" | tr -d ' ')
+if [ "$DTYPE" != "6" ]; then
+    echo "  ✗ Mach-O 类型 $DTYPE != 6（MH_DYLIB）"; exit 1
 fi
 echo "  ✓ filetype=6 (MH_DYLIB)"
 # 3) 必须有 LC_CODE_SIGNATURE（RootHide 加载前提之一）
