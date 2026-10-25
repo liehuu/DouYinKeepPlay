@@ -253,6 +253,25 @@ if play:
     ok("gAppNonActive" in play,
        "C3 play 即停旧只在小窗/后台生效",
        "前台乱停播放器 → 把用户正在看的视频掐掉")
+    # ★ v14 的设计必须保留：播放动作要解除「用户主动暂停」标记。
+    #   否则用户点一次暂停后，即使再点播放也永远恢复不了（死锁）。
+    ok("DYTouchPlayer" in play,
+       "C3b play 事件解除用户主动暂停标记",
+       "不解除 → 用户暂停过就再也恢复不了（v14 修的正是这个）")
+
+# C3c ★★★ v17：轮询恢复前必须检查 gUserPausedAt（用户实测回归）
+#   现象：切到小窗后点暂停，视频立刻又开始播（暂停无效）。
+#   根因：v16 把轮询窗口延长到整个后台期，而 DYRecoverTick 从来不检查
+#         gUserPausedAt → 暂停后下一 tick 又被 DYPlay 回来。
+#         v15 的 8 秒窗口让这个 bug 变成「8 秒内偶发」，v16 放大成「永久无效」。
+if tick:
+    ok("gUserPausedAt" in tick,
+       "C3c 轮询每 tick 检查用户主动暂停标记",
+       "不检查 → 用户在小窗里点暂停会被下一 tick 复活 → 暂停无效")
+    # 而且必须是「置位就不恢复」的形态，不能只读不用
+    ok(re.search(r'userPaused\s*=\s*\(gUserPausedAt\s*!=\s*nil\)', tick) is not None
+       or "userPaused = (gUserPausedAt != nil)" in tick,
+       "C3c 暂停标记的读法正确（置位即视为已暂停）")
 
 # C4 轮询窗口必须覆盖整个后台期（v15 只 8 秒，连续切视频会漏）
 #    ★ 宏 `#define DY_RECOVER_MAX_TICKS` 在函数体**外面**，

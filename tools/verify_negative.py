@@ -236,6 +236,31 @@ def m_d5():
     write("main.m", s)
 
 
+def m_c3c():
+    """轮询不再检查 gUserPausedAt —— v17 修的用户实测回归，必须被拦。
+
+    注入手法：把 userPaused 恒设为 NO（读标记那行改成 0）。
+    ★ 必须改**读取那一行**，不能只在 if 里加 && NO ——
+      判据查的是 `userPaused = (gUserPausedAt != nil)` 这个形态，
+      在 if 条件上动手脚判据锚不到。
+    """
+    s = read("main.m")
+    s = s.replace("    userPaused = (gUserPausedAt != nil);",
+                  "    userPaused = NO;  // 注入：忽略用户主动暂停")
+    write("main.m", s)
+
+
+def m_c3b():
+    """play 事件不再解除用户暂停标记 —— 会死锁，必须被拦。"""
+    s = read("main.m")
+    s = s.replace("    DYRegisterPlayerInstance(self);\n"
+                  "    DYTouchPlayer(self);   // 先让 self 成为 newest，再停其它",
+                  "    DYRegisterPlayerInstance(self);   // 注入：不刷新 newest")
+    write("main.m", s)
+
+
+case("C3c 轮询不检查用户暂停标记", m_c3c, "C3c 轮询每 tick 检查用户主动暂停标记")
+case("C3b play 不解除暂停标记", m_c3b, "C3b play 事件解除用户主动暂停标记")
 case("A3 去掉 constructor", m_a3, "A3 有 constructor 入口")
 case("B1 VC.pause 查表取 orig（v15 递归根因）", m_b1, "B1 VC.pause 体内不查表取 orig")
 case("B3 去掉签名校验", m_b3, "B3 hook 前校验方法签名")

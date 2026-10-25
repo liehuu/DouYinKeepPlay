@@ -1,4 +1,4 @@
-// DouYinKeepPlay.dylib v16 — 抖音小窗/后台播放保持（VC 层 pause 拦截 + 单一音频源强制）
+// DouYinKeepPlay.dylib v17 — 抖音小窗/后台播放保持（VC 层 pause 拦截 + 单一音频源强制 + 用户暂停保持）
 //
 // ★★★ v16 修复（用户实测：卸载本插件后「小窗切下一条视频仍留有上一条的声音」消失）：
 //   现象：小窗里点 ±10 秒切到下一条视频 → 新视频在放，**上一条的声音还在响**。
@@ -27,6 +27,27 @@
 //   ★ 注意：这三条都只在「保持播放生效中（离前台）」时动作，
 //     回前台后一切交还抖音（gAppNonActive=NO → 轮询不跑）。
 //
+// ★★★ v17 修复（用户实测回归）：切到小窗后，视频暂停无效。
+//   现象：小窗里点暂停按钮，视频立刻又开始播。
+//   根因（v16 自己引入，代码位置可核）：
+//     v16 把轮询窗口从 40 tick(8s) 延长到整个后台期（3000 tick），
+//     但 DYRecoverTick **从来不检查 gUserPausedAt**（v14 引入的
+//     「用户主动暂停」标记只在 DYEnterBackgroundKeepAlive 里被读过一次）。
+//     于是：用户点暂停 → VC.pause 放行（dt>=2s）→ 播放器真的暂停
+//           → 下一 tick `DYPlay(newest)` 又把它 play 回来 → 暂停无效。
+//     v15 的 8 秒窗口让这个 bug 表现为「8 秒内偶发」，v16 放大成「永久无效」。
+//     ★ 附带伤害：DYPlay() 走 [newest play] → 进 DYPlayerPlayImpl →
+//       DYTouchPlayer(self) → **把 gUserPausedAt 清掉** → 标记没了，
+//       用户再点暂停也不再被记录 → 彻底死锁。
+//   修法：DYRecoverTick 每个 tick 恢复前先读 gUserPausedAt，置位就**不恢复**。
+//     ★ 轮询不因此退出：用户暂停后仍可能切视频，那时还需要「停旧」。
+//     ★ 用户重新点播放 → DYPlayerPlayImpl → DYTouchPlayer 清标记 →
+//       下一 tick 恢复 newest → 行为正确（不会死锁）。
+//
+// ★ 已知局限（故意不改）：切小窗后 2 秒内点暂停仍会被拦截。
+//   这是 v11 起验证有效的「切小窗保持播放」机制（VC.pause 拦截窗 dt<2s），
+//   改它会破坏本插件的核心功能。超过 2 秒点暂停一定生效。
+
 // v10 诊断版实测（用户回传双弹窗）确认关键事实：
 //   - 底层播放器 hook 到 3 个：BDSimMediaPlayer / ALMSysPlayerWrapper /
 //     ALMOwnPlayerWrapper（ALM 系 = 抖音 feed 视频真实底层播放器，conform IESVideoPlayerProtocol）
@@ -445,20 +466,48 @@ static void DYRecoverTick(void) {
     NSArray *snapshot = DYCurrentPlayersSnapshot();
     id newest = DYNewestPlayerIn(snapshot);
 
+    // ★★★ v17 修复（用户实测回归）：小窗里点暂停，视频立刻又开始播。
+    //
+    //   根因：gUserPausedAt（v14 引入的「用户主动暂停」标记）只在
+    //   DYEnterBackgroundKeepAlive 里被检查（决定 gShouldRecover），
+    //   DYRecoverTick **从来不检查它**。v16 又把轮询窗口从 8 秒延长到整个
+    //   后台期，于是「暂停 → 下一 tick 又 DYPlay 回来」从「8 秒内偶发」
+    //   变成「只要在小窗里就永久无效」。
+    //
+    //   而且 DYPlay() 走的是 [newest play]，会进入 DYPlayerPlayImpl →
+    //   DYTouchPlayer(self) → **把 gUserPausedAt 清掉** → 保护彻底失效，
+    //   用户再点暂停也没用（标记已经没了）。
+    //
+    //   修法：每个 tick 恢复前先读 gUserPausedAt，置位就**不恢复**。
+    //   ★ 但轮询不能因此退出：用户暂停后仍可能切视频，那时还需要「停旧」。
+    //     所以只跳过恢复动作，停旧照做（停旧是幂等的，且只收多余音频源，
+    //     不会碰用户主动暂停的那一个）。
+    //   ★ 用户重新点播放 → DYPlayerPlayImpl → DYTouchPlayer 清标记
+    //     → 下一 tick 恢复 newest → 行为正确。
+    BOOL userPaused = NO;
+    os_unfair_lock_lock(&gLock);
+    userPaused = (gUserPausedAt != nil);
+    os_unfair_lock_unlock(&gLock);
+
     NSUInteger recovered = 0;
     NSUInteger silenced = 0;
     if (newest) {
-        // 只恢复 newest 这一个（防止复活旧音频）
-        if (DYIsPaused(newest)) {
-            if (DYPlay(newest)) recovered++;
+        if (userPaused) {
+            // 用户主动暂停 → 尊重暂停态，绝不恢复
+            silenced = DYSilenceAllBut(newest, snapshot);
+        } else {
+            // 只恢复 newest 这一个（防止复活旧音频）
+            if (DYIsPaused(newest)) {
+                if (DYPlay(newest)) recovered++;
+            }
+            // 然后收掉所有非 newest 但仍在响的
+            silenced = DYSilenceAllBut(newest, snapshot);
         }
-        // 然后收掉所有非 newest 但仍在响的
-        silenced = DYSilenceAllBut(newest, snapshot);
     }
 
     if (recovered || silenced) {
-        NSLog(@"[DouYinKeepPlay] 轮询: 恢复 %lu 个 / 静默旧音频 %lu 个 (tick %ld, 注册 %lu)",
-              (unsigned long)recovered, (unsigned long)silenced,
+        NSLog(@"[DouYinKeepPlay] 轮询: 恢复 %lu 个 / 静默旧音频 %lu 个 / 用户已暂停=%d (tick %ld, 注册 %lu)",
+              (unsigned long)recovered, (unsigned long)silenced, userPaused ? 1 : 0,
               (long)tick, (unsigned long)snapshot.count);
     }
 #if DYDIAG

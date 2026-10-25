@@ -9,9 +9,11 @@ env:
   # 版本号单一来源。
   # 1.0-15：v15 修 hook 无限递归（抖音随机闪退）。
   # 1.0-16：v16 修「小窗切下一条视频仍留上一条的声音」（用户实测）。
+  # 1.0-17：v17 修 v16 引入的回归 —— 切到小窗后点暂停无效
+  #         （轮询不检查 gUserPausedAt，暂停后下一 tick 又被 play 回来）。
   #         轮询改为每 tick 现算 newest + 停旧；play 事件即停旧；
   #         轮询窗口从 8 秒延长到整个后台期。
-  VERSION: 1.0-16
+  VERSION: 1.0-17
   HOMEBREW_NO_AUTO_UPDATE: 1
   HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
 
