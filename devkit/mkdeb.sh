@@ -116,25 +116,35 @@ def make_ar(name, data):
     return hdr + data + pad
 
 
-def tar_bytes(dirpath, arcprefix):
+def tar_bytes(dirpath, arcprefix, skip_top=()):
     """把目录打成 tar 字节流（GNU_FORMAT，排除 PAX 扩展头）。
 
     ★★ 只把**文件**交给 addfile 读内容，目录用 addfile(ti) 不带文件对象。
        早期写法把 dirs 和 files 混在一起遍历并对每一项都 open()，
        遇到目录就 IsADirectoryError（macOS runner 实测崩在这一行）。
+
+    ★ skip_top：顶层要跳过的目录名（如 ("DEBIAN",)）。
+       data.tar **绝不能含 DEBIAN/**：rootless 上 / 只读，装到一半要写
+       DEBIAN 会直接失败 → 整包装不上。这不是「风格问题」，是装不上。
     """
     buf = io.BytesIO()
     tf = tarfile.open(fileobj=buf, mode="w", format=tarfile.GNU_FORMAT)
-    # 先加目录项（保证 tar 里有明确的目录条目，dpkg 解包时权限才正确）
     for root, dirs, files in os.walk(dirpath):
         dirs.sort()
         rel = os.path.relpath(root, dirpath)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
         if rel != ".":
+            # 顶层过滤：DEBIAN 整个子树不进 data.tar
+            if depth == 1 and rel.split(os.sep)[0] in skip_top:
+                dirs[:] = []
+                continue
             ti = tf.gettarinfo(root, arcname=arcprefix + rel.replace(os.sep, "/"))
             ti.mtime = MTIME
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = ""
             tf.addfile(ti)
+        else:
+            dirs[:] = [d for d in dirs if d not in skip_top]
         for name in sorted(files):
             full = os.path.join(root, name)
             arc = arcprefix + os.path.relpath(full, dirpath).replace(os.sep, "/")
@@ -175,7 +185,7 @@ with __import__("gzip").GzipFile(fileobj=c, mode="wb", mtime=MTIME) as gz:
 control_tar = c.getvalue()
 
 # data.tar.xz
-data_bytes = tar_bytes(os.path.join(stage), "./")
+data_bytes = tar_bytes(stage, "./", skip_top=("DEBIAN",))
 # ★★ data.tar 绝不能含 DEBIAN/ 目录：rootless 上 / 只读，
 #    装到一半要写 DEBIAN 会直接失败 → 整包装不上。
 names = [m.name for m in tarfile.open(fileobj=io.BytesIO(data_bytes)).getmembers()]
