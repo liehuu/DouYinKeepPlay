@@ -117,15 +117,27 @@ def make_ar(name, data):
 
 
 def tar_bytes(dirpath, arcprefix):
-    """把目录打成 tar 字节流（GNU_FORMAT，排除 PAX 扩展头）。"""
+    """把目录打成 tar 字节流（GNU_FORMAT，排除 PAX 扩展头）。
+
+    ★★ 只把**文件**交给 addfile 读内容，目录用 addfile(ti) 不带文件对象。
+       早期写法把 dirs 和 files 混在一起遍历并对每一项都 open()，
+       遇到目录就 IsADirectoryError（macOS runner 实测崩在这一行）。
+    """
     buf = io.BytesIO()
     tf = tarfile.open(fileobj=buf, mode="w", format=tarfile.GNU_FORMAT)
+    # 先加目录项（保证 tar 里有明确的目录条目，dpkg 解包时权限才正确）
     for root, dirs, files in os.walk(dirpath):
         dirs.sort()
-        for name in sorted(dirs) + sorted(files):
+        rel = os.path.relpath(root, dirpath)
+        if rel != ".":
+            ti = tf.gettarinfo(root, arcname=arcprefix + rel.replace(os.sep, "/"))
+            ti.mtime = MTIME
+            ti.uid = ti.gid = 0
+            ti.uname = ti.gname = ""
+            tf.addfile(ti)
+        for name in sorted(files):
             full = os.path.join(root, name)
-            rel = os.path.relpath(full, dirpath)
-            arc = arcprefix + rel.replace(os.sep, "/")
+            arc = arcprefix + os.path.relpath(full, dirpath).replace(os.sep, "/")
             ti = tf.gettarinfo(full, arcname=arc)
             ti.mtime = MTIME
             ti.uid = ti.gid = 0
