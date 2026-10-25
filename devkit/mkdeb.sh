@@ -219,7 +219,10 @@ pos = 8
 members = {}
 while pos < len(d):
     hdr = d[pos:pos + 60]
-    name = hdr[0:16].decode().strip()
+    # ★ GNU ar 成员名以 "/" 结尾（make_ar 里 name + b"/"），比较前必须去掉，
+    #   否则 {"debian-binary/"} != {"debian-binary"} → 断言失败。
+    #   （macOS runner 实测：deb 已正确打出，自证脚本却在这里误报。）
+    name = hdr[0:16].decode().strip().rstrip("/")
     size = int(hdr[48:58].decode().strip())
     members[name] = d[pos + 60:pos + 60 + size]
     pos += 60 + size + (size % 2)
