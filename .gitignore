@@ -3,3 +3,5 @@ _dl*/
 *.deb
 .tok
 packages-*.zip
+tmp_t/
+*.zip
